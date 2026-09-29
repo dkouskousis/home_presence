@@ -1,0 +1,11 @@
+{
+  "domain": "guest_presence",
+  "name": "Guest Presence",
+  "version": "0.1.0",
+  "documentation": "https://developer.ui.com/network/",
+  "requirements": [],
+  "dependencies": ["http", "websocket_api", "panel_custom"],
+  "codeowners": [],
+  "config_flow": true,
+  "iot_class": "cloud_polling"
+}
