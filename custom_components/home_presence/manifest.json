@@ -1,5 +1,5 @@
 {
-  "domain": "guest_presence",
+  "domain": "home_presence",
   "name": "Home Presence",
   "version": "0.2.0",
   "documentation": "https://developer.ui.com/network/",

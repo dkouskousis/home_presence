@@ -17,7 +17,7 @@ class HomePresencePanel extends HTMLElement {
     if (!force && (this.shadowRoot?.querySelector("dialog[open]") ||
         ["INPUT", "SELECT"].includes(active?.tagName))) return;
     try {
-      this._entries = await this._hass.callWS({ type: "guest_presence/list" });
+      this._entries = await this._hass.callWS({ type: "home_presence/list" });
       this._error = "";
     } catch (error) {
       this._error = error.message || String(error);
@@ -27,7 +27,7 @@ class HomePresencePanel extends HTMLElement {
 
   async update(type, data) {
     try {
-      await this._hass.callWS({ type: `guest_presence/${type}`, ...data });
+      await this._hass.callWS({ type: `home_presence/${type}`, ...data });
       await this.refresh(true);
     } catch (error) {
       this._error = error.message || String(error);

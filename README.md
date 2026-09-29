@@ -17,7 +17,7 @@ Home Assistant integration for tracking selected devices on your network, naming
 
 ## Install
 
-1. Add this repository to HACS as a custom integration, or copy `custom_components/guest_presence` to `/config/custom_components/`. Restart Home Assistant.
+1. Add this repository to HACS as a custom integration, or copy `custom_components/home_presence` to `/config/custom_components/`. Restart Home Assistant.
 2. In **Settings → Devices & services → Add integration**, choose **Home Presence → UniFi Cloud**. Enter the UniFi Site Manager API key from **Settings → API Keys**, then choose the console and site.
 3. Open **Home Presence** in the sidebar. In **Groups**, create any groups you need. In **Devices**, add phones or other devices and assign them to groups.
 4. Use the device trackers or group binary sensors in automations. Entity IDs are displayed beside tracked devices and groups.
