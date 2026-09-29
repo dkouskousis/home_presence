@@ -20,11 +20,13 @@ Selected device trackers are enabled even when the phone does not have a matchin
 1. Add this repository to HACS as a custom integration, or copy `custom_components/home_presence` to `/config/custom_components/`, then restart Home Assistant.
 2. Go to **Settings → Devices & services → Add integration → Home Presence**. Complete the one-step setup.
 3. Open **Home Presence → Integrations** in the sidebar. Add UniFi Cloud or TP-Link Omada, supply credentials, discover the controller and site, and save. Both sources can be configured together.
-4. Add connected devices from **Devices** and assign them to groups created in **Groups**. Set the refresh interval (7–600 seconds) and away delay (0–3600 seconds) in **Settings**.
+4. Add connected devices from **Devices** and assign them to groups created in **Groups**. In each device's **Add device** or **Edit** dialog, set its refresh interval (7–600 seconds) and away delay (0–3600 seconds). Existing devices inherit the previous general settings when upgrading.
+
+The network source is queried at the shortest selected device interval because its API returns clients for the entire site. Each selected device's presence is sampled at its own interval; the away delay applies after its last connected sample.
 
 ## Backup and restore
 
-Use **Settings → Backup & restore** to download a JSON backup or restore one. A backup contains integrations (including API keys and client secrets), selected devices, groups, and settings. Keep the file private. Restoring replaces the entire Home Presence setup and removes device and group entities that are absent from the backup. The file is checked before any changes are applied; confirm the replacement in the dialog.
+Use **Settings → Backup & restore** to download a JSON backup or restore one. A backup contains integrations (including API keys and client secrets), selected devices with their individual settings, and groups. Keep the file private. Restoring replaces the entire Home Presence setup and removes device and group entities that are absent from the backup. Older backups with general settings are accepted and those values are copied to every selected device. The file is checked before any changes are applied; confirm the replacement in the dialog.
 
 ### UniFi Cloud
 

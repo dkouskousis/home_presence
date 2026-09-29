@@ -6,7 +6,7 @@ import re
 from urllib.parse import urlsplit
 
 FORMAT = "home_presence"
-VERSION = 1
+VERSION = 2
 _MAC = re.compile(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}\Z")
 _ID = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 _FIELDS = {
@@ -17,14 +17,21 @@ _FIELDS = {
 
 def validate_backup(value: object) -> dict:
     """Return validated data with no unexpected keys or untrusted identifiers."""
-    if not isinstance(value, dict) or set(value) != {
-        "format", "version", "sources", "devices", "groups", "settings"
-    } or value["format"] != FORMAT or type(value["version"]) is not int or value["version"] != VERSION:
+    if (not isinstance(value, dict) or value.get("format") != FORMAT
+            or type(value.get("version")) is not int or value["version"] not in (1, VERSION)
+            or set(value) != ({"format", "version", "sources", "devices", "groups"}
+                              | ({"settings"} if value["version"] == 1 else set()))):
         raise ValueError("Not a supported Home Presence backup")
 
-    sources, devices, groups, settings = (
-        value[key] for key in ("sources", "devices", "groups", "settings")
-    )
+    sources, devices, groups = (value[key] for key in ("sources", "devices", "groups"))
+    if value["version"] == 1:
+        settings = value["settings"]
+        if (not isinstance(settings, dict) or set(settings) != {"poll_seconds", "away_seconds"}
+                or type(settings["poll_seconds"]) is not int
+                or not 7 <= settings["poll_seconds"] <= 600
+                or type(settings["away_seconds"]) is not int
+                or not 0 <= settings["away_seconds"] <= 3600):
+            raise ValueError("Invalid settings in backup")
     if not isinstance(sources, dict) or set(sources) - set(_FIELDS):
         raise ValueError("Invalid integrations in backup")
     for source_id, source in sources.items():
@@ -57,20 +64,27 @@ def validate_backup(value: object) -> dict:
             raise ValueError("Invalid device ID in backup")
         source_id, mac = device_id.split("|", 1)
         if (source_id not in sources or not _MAC.fullmatch(mac)
-                or not isinstance(device, dict) or set(device) != {"name", "groups"}
+                or not isinstance(device, dict)
+                or set(device) != ({"name", "groups"} if value["version"] == 1
+                                   else {"name", "groups", "poll_seconds", "away_seconds"})
                 or not isinstance(device["name"], str)
                 or not 1 <= len(device["name"].strip()) <= 80
                 or not isinstance(device["groups"], list)
                 or len(device["groups"]) > len(groups)
                 or any(not isinstance(group_id, str) or group_id not in groups
                        for group_id in device["groups"])
-                or len(device["groups"]) != len(set(device["groups"]))):
+                or len(device["groups"]) != len(set(device["groups"]))
+                or (value["version"] == 2 and (
+                    type(device["poll_seconds"]) is not int
+                    or not 7 <= device["poll_seconds"] <= 600
+                    or type(device["away_seconds"]) is not int
+                    or not 0 <= device["away_seconds"] <= 3600))):
             raise ValueError(f"Invalid device {device_id} in backup")
 
-    if (not isinstance(settings, dict) or set(settings) != {"poll_seconds", "away_seconds"}
-            or type(settings["poll_seconds"]) is not int
-            or not 7 <= settings["poll_seconds"] <= 600
-            or type(settings["away_seconds"]) is not int
-            or not 0 <= settings["away_seconds"] <= 3600):
-        raise ValueError("Invalid settings in backup")
+    if value["version"] == 1:
+        return {
+            "format": FORMAT, "version": VERSION, "sources": sources,
+            "devices": {key: {**device, **settings} for key, device in devices.items()},
+            "groups": groups,
+        }
     return value

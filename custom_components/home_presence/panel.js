@@ -169,6 +169,8 @@ class HomePresencePanel extends HTMLElement {
         const groupNames = (device?.groups || []).map(id => entry.groups[id]?.name).filter(Boolean);
         identity.append(heading, this.element("div",
           `${status} · ${client.source} · ${client.ip ? client.ip + " · " : ""}${client.mac}${groupNames.length ? " · " + groupNames.join(", ") : ""}`, "meta"));
+        if (device) identity.append(this.element("div",
+          `Refresh every ${device.poll_seconds}s · Mark away after ${device.away_seconds}s`, "meta"));
         if (device && entry.device_entities[client.id]) {
           identity.append(this.element("div", entry.device_entities[client.id], "meta"));
         }
@@ -207,6 +209,18 @@ class HomePresencePanel extends HTMLElement {
     }
     groupLabel.append(checks);
     form.append(groupLabel);
+    const pollLabel = this.element("label", "Refresh interval (seconds)");
+    const poll = this.element("input");
+    poll.type = "number"; poll.min = 7; poll.max = 600; poll.required = true;
+    poll.value = device?.poll_seconds ?? 60;
+    pollLabel.append(poll);
+    const awayLabel = this.element("label", "Mark away after disconnect (seconds)");
+    const away = this.element("input");
+    away.type = "number"; away.min = 0; away.max = 3600; away.required = true;
+    away.value = device?.away_seconds ?? 180;
+    awayLabel.append(away);
+    form.append(pollLabel, awayLabel, this.element("p",
+      "A longer away delay helps with brief Wi-Fi disconnects. Cloud errors make entities unavailable."));
     const actions = this.element("div", undefined, "actions");
     if (device) actions.append(this.button("Remove", async () => {
       dialog.close();
@@ -223,6 +237,7 @@ class HomePresencePanel extends HTMLElement {
       await this.update("set_device", {
         entry_id:entry.id, device_id:client.id, name:input.value.trim(),
         groups:[...checks.querySelectorAll("input:checked")].map(item => item.value),
+        poll_seconds:Number(poll.value), away_seconds:Number(away.value),
       });
     };
     dialog.append(form);
@@ -430,34 +445,6 @@ class HomePresencePanel extends HTMLElement {
   renderSettings() {
     const root = this.shadowRoot.querySelector("#view");
     for (const entry of this._entries) {
-      const section = this.element("section");
-      section.append(this.element("h2", entry.title));
-      const form = this.element("form");
-      const pollLabel = this.element("label", "Refresh interval (seconds)");
-      const poll = this.element("input");
-      poll.type = "number"; poll.min = 7; poll.max = 600;
-      poll.value = entry.settings.poll_seconds;
-      pollLabel.append(poll);
-      const awayLabel = this.element("label", "Mark away after disconnect (seconds)");
-      const away = this.element("input");
-      away.type = "number"; away.min = 0; away.max = 3600;
-      away.value = entry.settings.away_seconds;
-      awayLabel.append(away);
-      form.append(pollLabel, awayLabel, this.element("p",
-        "A longer away delay helps with brief Wi-Fi disconnects. Cloud errors make entities unavailable."));
-      const save = this.element("button", "Save settings");
-      save.type = "submit";
-      form.append(this.element("div", undefined, "actions"));
-      form.lastChild.append(save);
-      form.onsubmit = async event => {
-        event.preventDefault();
-        await this.update("set_settings", {
-          entry_id:entry.id, poll_seconds:Number(poll.value), away_seconds:Number(away.value),
-        });
-      };
-      section.append(form);
-      root.append(section);
-
       const backup = this.element("section");
       backup.append(this.element("h2", "Backup & restore"),
         this.element("p", "Download all integrations, selected devices, groups and settings. The file includes API keys and secrets; keep it private."));
@@ -491,7 +478,7 @@ class HomePresencePanel extends HTMLElement {
         try {
           if (file.files[0].size > 5 * 1024 * 1024) throw Error("Backup exceeds 5 MB.");
           const data = JSON.parse(await file.files[0].text());
-          if (!data || data.format !== "home_presence" || data.version !== 1) {
+          if (!data || data.format !== "home_presence" || ![1, 2].includes(data.version)) {
             throw Error("This is not a supported Home Presence backup.");
           }
           const message = `Restore ${Object.keys(data.devices || {}).length} devices, ` +

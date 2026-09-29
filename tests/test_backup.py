@@ -13,7 +13,7 @@ spec.loader.exec_module(backup)
 class BackupValidationTest(unittest.TestCase):
     def setUp(self):
         self.data = {
-            "format": "home_presence", "version": 1,
+            "format": "home_presence", "version": 2,
             "sources": {"omada": {
                 "type": "omada", "address": "https://omada.example:8043",
                 "omadac_id": "controller", "client_id": "client",
@@ -21,9 +21,9 @@ class BackupValidationTest(unittest.TestCase):
             }},
             "devices": {"omada|aa:bb:cc:dd:ee:ff": {
                 "name": "Phone", "groups": ["family"],
+                "poll_seconds": 60, "away_seconds": 180,
             }},
             "groups": {"family": {"name": "Family"}},
-            "settings": {"poll_seconds": 60, "away_seconds": 180},
         }
 
     def test_valid_backup_retains_credentials_and_memberships(self):
@@ -51,11 +51,29 @@ class BackupValidationTest(unittest.TestCase):
             backup.validate_backup(self.data)
 
     def test_allows_seven_second_polling_and_rejects_six(self):
-        self.data["settings"]["poll_seconds"] = 7
+        device = self.data["devices"]["omada|aa:bb:cc:dd:ee:ff"]
+        device["poll_seconds"] = 7
         self.assertIs(backup.validate_backup(self.data), self.data)
-        self.data["settings"]["poll_seconds"] = 6
+        device["poll_seconds"] = 6
         with self.assertRaises(ValueError):
             backup.validate_backup(self.data)
+
+    def test_rejects_invalid_per_device_away_delay(self):
+        self.data["devices"]["omada|aa:bb:cc:dd:ee:ff"]["away_seconds"] = 3601
+        with self.assertRaises(ValueError):
+            backup.validate_backup(self.data)
+
+    def test_migrates_version_one_settings_to_every_device(self):
+        self.data["version"] = 1
+        self.data["settings"] = {"poll_seconds": 7, "away_seconds": 120}
+        device = self.data["devices"]["omada|aa:bb:cc:dd:ee:ff"]
+        device.pop("poll_seconds")
+        device.pop("away_seconds")
+        result = backup.validate_backup(self.data)
+        self.assertEqual(result["version"], 2)
+        self.assertNotIn("settings", result)
+        self.assertEqual(result["devices"]["omada|aa:bb:cc:dd:ee:ff"]["poll_seconds"], 7)
+        self.assertEqual(result["devices"]["omada|aa:bb:cc:dd:ee:ff"]["away_seconds"], 120)
 
 
 if __name__ == "__main__":

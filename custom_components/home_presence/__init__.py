@@ -53,8 +53,9 @@ class PresenceCoordinator(DataUpdateCoordinator):
         self.store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
         self.devices: dict[str, dict] = {}
         self.groups: dict[str, dict] = {}
-        self.settings = DEFAULT_SETTINGS.copy()
         self.last_seen: dict[str, datetime] = {}
+        self.last_checked: dict[str, datetime] = {}
+        self.observed: dict[str, bool] = {}
         self.platforms: dict[str, object] = {}
 
     def _make_providers(self) -> None:
@@ -77,6 +78,11 @@ class PresenceCoordinator(DataUpdateCoordinator):
                             if not key.startswith(source_id + "|")}
             self.last_seen = {key: value for key, value in self.last_seen.items()
                               if not key.startswith(source_id + "|")}
+            self.last_checked = {key: value for key, value in self.last_checked.items()
+                                 if not key.startswith(source_id + "|")}
+            self.observed = {key: value for key, value in self.observed.items()
+                             if not key.startswith(source_id + "|")}
+            self._set_poll_interval()
             registry = entity_registry.async_get(self.hass)
             for entity in list(registry.entities.values()):
                 if (entity.platform == DOMAIN and entity.config_entry_id == self.entry.entry_id
@@ -93,24 +99,34 @@ class PresenceCoordinator(DataUpdateCoordinator):
 
     async def load(self) -> None:
         saved = await self.store.async_load() or {}
+        old_settings = {**DEFAULT_SETTINGS, **saved.get("settings", {})}
+        migrated = False
         if "guests" in saved and "devices" not in saved:
             self.groups = {"guests": {"name": "Guests"}}
             self.devices = {"unifi_cloud|" + mac: {"name": name, "groups": ["guests"]}
                             for mac, name in saved["guests"].items()}
-            await self.save()
         else:
             self.devices = saved.get("devices", {})
             if "api_key" in self.entry.data:
                 self.devices = {key if "|" in key else "unifi_cloud|" + key: value
                                 for key, value in self.devices.items()}
-                await self.save()
             self.groups = saved.get("groups", {})
-        self.settings.update(saved.get("settings", {}))
-        self.update_interval = timedelta(seconds=self.settings["poll_seconds"])
+        for device in self.devices.values():
+            for key, default in old_settings.items():
+                migrated |= key not in device
+                device.setdefault(key, default)
+        self._set_poll_interval()
+        if saved and (migrated or "settings" in saved or "guests" in saved
+                      or "api_key" in self.entry.data):
+            await self.save()
+
+    def _set_poll_interval(self) -> None:
+        self.update_interval = timedelta(seconds=min(
+            (device["poll_seconds"] for device in self.devices.values()), default=60))
 
     async def save(self) -> None:
         await self.store.async_save({
-            "devices": self.devices, "groups": self.groups, "settings": self.settings,
+            "devices": self.devices, "groups": self.groups,
         })
 
     async def _async_update_data(self) -> dict[str, dict]:
@@ -126,7 +142,15 @@ class PresenceCoordinator(DataUpdateCoordinator):
             for mac, client in clients.items():
                 key = source_id + "|" + mac
                 connected[key] = {**client, "id": key, "source": source_id}
-                if key in self.devices:
+            for key, device in self.devices.items():
+                if not key.startswith(source_id + "|"):
+                    continue
+                checked = self.last_checked.get(key)
+                if checked is not None and (now - checked).total_seconds() < device["poll_seconds"]:
+                    continue
+                self.last_checked[key] = now
+                self.observed[key] = key in connected
+                if self.observed[key]:
                     self.last_seen[key] = now
         return connected
 
@@ -134,11 +158,11 @@ class PresenceCoordinator(DataUpdateCoordinator):
         return self.status.get(device_id.split("|", 1)[0], {}).get("available", False)
 
     def present(self, device_id: str) -> bool:
-        if device_id in (self.data or {}):
+        if self.observed.get(device_id):
             return True
         seen = self.last_seen.get(device_id)
         return bool(seen and (datetime.now(timezone.utc) - seen).total_seconds()
-                    < self.settings["away_seconds"])
+                    < self.devices[device_id]["away_seconds"])
 
     def present_ids(self) -> list[str]:
         return [device_id for device_id in self.devices if self.present(device_id)]
@@ -164,18 +188,22 @@ class PresenceCoordinator(DataUpdateCoordinator):
             registry.async_remove(entity_id)
 
     async def set_device(self, device_id: str, name: str | None,
-                         groups: list[str] | None = None) -> None:
+                         groups: list[str] | None = None, poll_seconds: int = 60,
+                         away_seconds: int = 180) -> None:
         existed = device_id in self.devices
         if name is None:
             self.devices.pop(device_id, None)
             self.last_seen.pop(device_id, None)
+            self.last_checked.pop(device_id, None)
+            self.observed.pop(device_id, None)
             await self.save()
             if existed:
                 await self.remove_entity("device_tracker", "device", device_id)
         else:
-            self.devices[device_id] = {"name": name.strip(), "groups": groups or []}
-            if device_id in (self.data or {}):
-                self.last_seen[device_id] = datetime.now(timezone.utc)
+            self.devices[device_id] = {"name": name.strip(), "groups": groups or [],
+                                       "poll_seconds": poll_seconds, "away_seconds": away_seconds}
+            self.last_checked.pop(device_id, None)
+            self.observed.pop(device_id, None)
             await self.save()
             if existed:
                 await self.rename_entity("device_tracker", "device", device_id, name.strip())
@@ -184,6 +212,8 @@ class PresenceCoordinator(DataUpdateCoordinator):
                 await self.platforms["device_tracker"].async_add_entities(
                     [PresenceDevice(self, device_id)]
                 )
+        self._set_poll_interval()
+        await self.async_request_refresh()
         self.async_update_listeners()
 
     async def set_group(self, group_id: str, name: str | None) -> str:
@@ -216,17 +246,11 @@ class PresenceCoordinator(DataUpdateCoordinator):
         self.async_update_listeners()
         return group_id
 
-    async def set_settings(self, poll_seconds: int, away_seconds: int) -> None:
-        self.settings = {"poll_seconds": poll_seconds, "away_seconds": away_seconds}
-        self.update_interval = timedelta(seconds=poll_seconds)
-        await self.save()
-        await self.async_request_refresh()
-
     def backup(self) -> dict:
         """Export configuration, including integration credentials."""
         return deepcopy({
             "format": FORMAT, "version": VERSION, "sources": self.sources,
-            "devices": self.devices, "groups": self.groups, "settings": self.settings,
+            "devices": self.devices, "groups": self.groups,
         })
 
     async def restore(self, backup: dict) -> None:
@@ -246,10 +270,11 @@ class PresenceCoordinator(DataUpdateCoordinator):
         self.sources = restored["sources"]
         self.devices = restored["devices"]
         self.groups = restored["groups"]
-        self.settings = restored["settings"]
         self.last_seen.clear()
+        self.last_checked.clear()
+        self.observed.clear()
         self.status.clear()
-        self.update_interval = timedelta(seconds=self.settings["poll_seconds"])
+        self._set_poll_interval()
         await self.save()
         self.hass.config_entries.async_update_entry(self.entry, data={"sources": self.sources})
         self._make_providers()
@@ -304,14 +329,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ])
         hass.data[DOMAIN]["_static_registered"] = True
     if not hass.data[DOMAIN].get("_commands_registered"):
-        for command in (ws_list, ws_set_device, ws_set_group, ws_set_settings,
+        for command in (ws_list, ws_set_device, ws_set_group,
                         ws_discover, ws_set_source, ws_backup, ws_restore):
             websocket_api.async_register_command(hass, command)
         hass.data[DOMAIN]["_commands_registered"] = True
     if not hass.data[DOMAIN].get("_panel_registered"):
         await panel_custom.async_register_panel(
             hass, frontend_url_path=DOMAIN, webcomponent_name="home-presence-panel",
-            module_url=f"/{DOMAIN}/panel.js?v=7", sidebar_title="Home Presence",
+            module_url=f"/{DOMAIN}/panel.js?v=8", sidebar_title="Home Presence",
             sidebar_icon="mdi:home-account", require_admin=True,
             config_panel_domain=DOMAIN,
         )
@@ -366,7 +391,6 @@ def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg
                                for key in coordinator.groups},
             "group_tracker_entities": {key: entity_id("device_tracker", "group_tracker", key)
                                        for key in coordinator.groups},
-            "settings": coordinator.settings,
             "present": coordinator.present_ids(),
             "unavailable": [key for key in coordinator.devices
                             if not coordinator.source_available(key)],
@@ -380,6 +404,8 @@ def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg
     vol.Required("device_id"): str,
     vol.Optional("name"): vol.Any(vol.All(str, vol.Length(min=1, max=80)), None),
     vol.Optional("groups"): [str],
+    vol.Optional("poll_seconds"): vol.All(vol.Coerce(int), vol.Range(min=7, max=600)),
+    vol.Optional("away_seconds"): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
 })
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -401,7 +427,12 @@ async def ws_set_device(hass: HomeAssistant, connection: websocket_api.ActiveCon
     if name is not None and not name.strip():
         connection.send_error(msg["id"], "invalid_name", "Device name is required")
         return
-    await coordinator.set_device(device_id, name, list(dict.fromkeys(groups)))
+    previous = coordinator.devices.get(device_id, DEFAULT_SETTINGS)
+    await coordinator.set_device(
+        device_id, name, list(dict.fromkeys(groups)),
+        msg.get("poll_seconds", previous["poll_seconds"]),
+        msg.get("away_seconds", previous["away_seconds"]),
+    )
     connection.send_result(msg["id"])
 
 
@@ -430,22 +461,6 @@ async def ws_set_group(hass: HomeAssistant, connection: websocket_api.ActiveConn
         return
     group_id = await coordinator.set_group(group_id, name)
     connection.send_result(msg["id"], {"group_id": group_id})
-
-
-@websocket_api.websocket_command({
-    vol.Required("type"): f"{DOMAIN}/set_settings",
-    vol.Required("entry_id"): str,
-    vol.Required("poll_seconds"): vol.All(vol.Coerce(int), vol.Range(min=7, max=600)),
-    vol.Required("away_seconds"): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
-})
-@websocket_api.require_admin
-@websocket_api.async_response
-async def ws_set_settings(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
-                          msg: dict) -> None:
-    if (coordinator := get_coordinator(hass, connection, msg)) is None:
-        return
-    await coordinator.set_settings(msg["poll_seconds"], msg["away_seconds"])
-    connection.send_result(msg["id"])
 
 
 @websocket_api.websocket_command({
