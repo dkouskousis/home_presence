@@ -1,10 +1,14 @@
 {
   "domain": "home_presence",
   "name": "Home Presence",
-  "version": "0.2.0",
-  "documentation": "https://developer.ui.com/network/",
+  "version": "0.3.0",
+  "documentation": "https://github.com/dkouskousis/home_presence",
   "requirements": [],
-  "dependencies": ["http", "websocket_api", "panel_custom"],
+  "dependencies": [
+    "http",
+    "websocket_api",
+    "panel_custom"
+  ],
   "codeowners": [],
   "config_flow": true,
   "iot_class": "cloud_polling"

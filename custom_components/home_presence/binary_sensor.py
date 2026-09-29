@@ -25,6 +25,11 @@ class AnyoneHome(CoordinatorEntity, BinarySensorEntity):
         self._attr_unique_id = coordinator.unique_id("all", "home")
 
     @property
+    def available(self):
+        return all(self.coordinator.source_available(key)
+                   for key in self.coordinator.devices)
+
+    @property
     def is_on(self):
         return bool(self.coordinator.present_ids())
 
@@ -41,6 +46,12 @@ class PresenceGroup(CoordinatorEntity, BinarySensorEntity):
     @property
     def name(self):
         return self.coordinator.groups[self.group_id]["name"]
+
+    @property
+    def available(self):
+        return all(self.coordinator.source_available(key)
+                   for key, device in self.coordinator.devices.items()
+                   if self.group_id in device["groups"])
 
     @property
     def is_on(self):

@@ -19,8 +19,8 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN
-from .providers.base import PresenceProvider
 from .providers.unifi_cloud import UniFiApiError, UniFiCloud, UniFiPresenceProvider, normalize_mac
+from .providers.omada import Omada, OmadaApiError, OmadaPresenceProvider
 
 PLATFORMS = ["device_tracker", "binary_sensor", "sensor"]
 DEFAULT_SETTINGS = {"poll_seconds": 60, "away_seconds": 180}
@@ -34,10 +34,16 @@ class PresenceCoordinator(DataUpdateCoordinator):
         super().__init__(hass, logger=_LOGGER, name=DOMAIN,
                          update_interval=timedelta(seconds=60))
         self.entry = entry
-        self.provider: PresenceProvider = UniFiPresenceProvider(
-            UniFiCloud(async_get_clientsession(hass), entry.data["api_key"]),
-            entry.data["console_id"], entry.data["site_id"],
-        )
+        self.sources: dict[str, dict] = dict(entry.data.get("sources", {}))
+        if "api_key" in entry.data:  # Upgrade the original UniFi setup in place.
+            self.sources.setdefault("unifi_cloud", {
+                "type": "unifi_cloud", "api_key": entry.data["api_key"],
+                "console_id": entry.data["console_id"], "site_id": entry.data["site_id"],
+                "label": entry.title,
+            })
+        self.status: dict[str, dict] = {}
+        self.providers: dict[str, object] = {}
+        self._make_providers()
         self.store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
         self.devices: dict[str, dict] = {}
         self.groups: dict[str, dict] = {}
@@ -45,15 +51,53 @@ class PresenceCoordinator(DataUpdateCoordinator):
         self.last_seen: dict[str, datetime] = {}
         self.platforms: dict[str, object] = {}
 
+    def _make_providers(self) -> None:
+        session = async_get_clientsession(self.hass)
+        self.providers = {}
+        for source_id, source in self.sources.items():
+            if source["type"] == "unifi_cloud":
+                self.providers[source_id] = UniFiPresenceProvider(
+                    UniFiCloud(session, source["api_key"]), source["console_id"], source["site_id"])
+            elif source["type"] == "omada":
+                self.providers[source_id] = OmadaPresenceProvider(
+                    Omada(session, source["address"], source["omadac_id"],
+                          source["client_id"], source["client_secret"]), source["site_id"])
+
+    async def set_source(self, source_id: str, source: dict | None) -> None:
+        if source is None:
+            self.sources.pop(source_id, None)
+            self.status.pop(source_id, None)
+            self.devices = {key: value for key, value in self.devices.items()
+                            if not key.startswith(source_id + "|")}
+            self.last_seen = {key: value for key, value in self.last_seen.items()
+                              if not key.startswith(source_id + "|")}
+            registry = entity_registry.async_get(self.hass)
+            for entity in list(registry.entities.values()):
+                if (entity.platform == DOMAIN and entity.config_entry_id == self.entry.entry_id
+                        and entity.unique_id.startswith(self.unique_id("device", source_id + "|"))):
+                    await self.platforms["device_tracker"].async_remove_entity(entity.entity_id)
+                    registry.async_remove(entity.entity_id)
+            await self.save()
+        else:
+            self.sources[source_id] = source
+        self.hass.config_entries.async_update_entry(self.entry, data={"sources": self.sources})
+        self._make_providers()
+        await self.async_refresh()
+        self.async_update_listeners()
+
     async def load(self) -> None:
         saved = await self.store.async_load() or {}
         if "guests" in saved and "devices" not in saved:
             self.groups = {"guests": {"name": "Guests"}}
-            self.devices = {mac: {"name": name, "groups": ["guests"]}
+            self.devices = {"unifi_cloud|" + mac: {"name": name, "groups": ["guests"]}
                             for mac, name in saved["guests"].items()}
             await self.save()
         else:
             self.devices = saved.get("devices", {})
+            if "api_key" in self.entry.data:
+                self.devices = {key if "|" in key else "unifi_cloud|" + key: value
+                                for key, value in self.devices.items()}
+                await self.save()
             self.groups = saved.get("groups", {})
         self.settings.update(saved.get("settings", {}))
         self.update_interval = timedelta(seconds=self.settings["poll_seconds"])
@@ -64,15 +108,24 @@ class PresenceCoordinator(DataUpdateCoordinator):
         })
 
     async def _async_update_data(self) -> dict[str, dict]:
-        try:
-            connected = await self.provider.connected()
-        except UniFiApiError as err:
-            raise UpdateFailed(str(err)) from err
+        connected: dict[str, dict] = {}
         now = datetime.now(timezone.utc)
-        for device_id in connected:
-            if device_id in self.devices:
-                self.last_seen[device_id] = now
+        for source_id, provider in self.providers.items():
+            try:
+                clients = await provider.connected()
+                self.status[source_id] = {"available": True, "error": ""}
+            except (UniFiApiError, OmadaApiError) as err:
+                self.status[source_id] = {"available": False, "error": str(err)}
+                continue
+            for mac, client in clients.items():
+                key = source_id + "|" + mac
+                connected[key] = {**client, "id": key, "source": source_id}
+                if key in self.devices:
+                    self.last_seen[key] = now
         return connected
+
+    def source_available(self, device_id: str) -> bool:
+        return self.status.get(device_id.split("|", 1)[0], {}).get("available", False)
 
     def present(self, device_id: str) -> bool:
         if device_id in (self.data or {}):
@@ -169,13 +222,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ])
         hass.data[DOMAIN]["_static_registered"] = True
     if not hass.data[DOMAIN].get("_commands_registered"):
-        for command in (ws_list, ws_set_device, ws_set_group, ws_set_settings):
+        for command in (ws_list, ws_set_device, ws_set_group, ws_set_settings,
+                        ws_discover, ws_set_source):
             websocket_api.async_register_command(hass, command)
         hass.data[DOMAIN]["_commands_registered"] = True
     if not hass.data[DOMAIN].get("_panel_registered"):
         await panel_custom.async_register_panel(
             hass, frontend_url_path=DOMAIN, webcomponent_name="home-presence-panel",
-            module_url=f"/{DOMAIN}/panel.js?v=2", sidebar_title="Home Presence",
+            module_url=f"/{DOMAIN}/panel.js?v=3", sidebar_title="Home Presence",
             sidebar_icon="mdi:home-account", require_admin=True,
             config_panel_domain=DOMAIN,
         )
@@ -215,8 +269,13 @@ def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg
             return registry.async_get_entity_id(domain, DOMAIN, coordinator.unique_id(kind, key))
 
         entries.append({
-            "id": entry_id, "title": coordinator.entry.title,
-            "provider": "UniFi Cloud", "available": coordinator.last_update_success,
+            "id": entry_id, "title": "Home Presence",
+            "sources": [{"id": key, "type": source["type"],
+                         "label": source.get("label", key),
+                         "site_id": source["site_id"],
+                         "address": source.get("address", ""),
+                         **coordinator.status.get(key, {"available": False, "error": "Waiting for update"})}
+                        for key, source in coordinator.sources.items()],
             "clients": list((coordinator.data or {}).values()),
             "devices": coordinator.devices, "groups": coordinator.groups,
             "device_entities": {key: entity_id("device_tracker", "device", key)
@@ -224,7 +283,9 @@ def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg
             "group_entities": {key: entity_id("binary_sensor", "group", key)
                                for key in coordinator.groups},
             "settings": coordinator.settings,
-            "present": coordinator.present_ids() if coordinator.last_update_success else [],
+            "present": coordinator.present_ids(),
+            "unavailable": [key for key in coordinator.devices
+                            if not coordinator.source_available(key)],
         })
     connection.send_result(msg["id"], entries)
 
@@ -242,8 +303,9 @@ async def ws_set_device(hass: HomeAssistant, connection: websocket_api.ActiveCon
                         msg: dict) -> None:
     if (coordinator := get_coordinator(hass, connection, msg)) is None:
         return
-    device_id = normalize_mac(msg["device_id"])
-    if not device_id or (device_id not in (coordinator.data or {})
+    device_id = msg["device_id"]
+    source_id, sep, mac = device_id.partition("|")
+    if not sep or source_id not in coordinator.sources or not normalize_mac(mac) or not device_id or (device_id not in (coordinator.data or {})
                          and device_id not in coordinator.devices):
         connection.send_error(msg["id"], "unknown_device", "Device is not connected")
         return
@@ -299,4 +361,89 @@ async def ws_set_settings(hass: HomeAssistant, connection: websocket_api.ActiveC
     if (coordinator := get_coordinator(hass, connection, msg)) is None:
         return
     await coordinator.set_settings(msg["poll_seconds"], msg["away_seconds"])
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/discover",
+    vol.Required("entry_id"): str,
+    vol.Required("provider"): vol.In(["unifi_cloud", "omada"]),
+    vol.Required("credentials"): dict,
+    vol.Optional("console_id"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_discover(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
+                      msg: dict) -> None:
+    if get_coordinator(hass, connection, msg) is None:
+        return
+    credentials = msg["credentials"]
+    try:
+        if msg["provider"] == "unifi_cloud":
+            key = credentials["api_key"].strip()
+            if not key:
+                raise ValueError("API key required")
+            api = UniFiCloud(async_get_clientsession(hass), key)
+            if "console_id" in msg:
+                items = await api.sites(msg["console_id"])
+                result = [{"id": item["id"], "name": item.get("name") or item["id"]}
+                          for item in items if item.get("id")]
+            else:
+                items = await api.hosts()
+                result = [{"id": item["id"], "name":
+                           item.get("reportedState", {}).get("name") or
+                           item.get("userData", {}).get("name") or item["id"]}
+                          for item in items if item.get("id") and item.get("type") == "console"]
+        else:
+            api = Omada(async_get_clientsession(hass), credentials["address"],
+                        credentials["omadac_id"], credentials["client_id"],
+                        credentials["client_secret"])
+            result = [{"id": item["siteId"], "name": item.get("name") or item["siteId"]}
+                      for item in await api.sites() if item.get("siteId")]
+    except (KeyError, ValueError, UniFiApiError, OmadaApiError) as err:
+        connection.send_error(msg["id"], "source_error", str(err))
+        return
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/set_source",
+    vol.Required("entry_id"): str,
+    vol.Required("provider"): vol.In(["unifi_cloud", "omada"]),
+    vol.Optional("source"): dict,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_set_source(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
+                        msg: dict) -> None:
+    if (coordinator := get_coordinator(hass, connection, msg)) is None:
+        return
+    source_id = msg["provider"]
+    source = msg.get("source")
+    if source is None:
+        await coordinator.set_source(source_id, None)
+        connection.send_result(msg["id"])
+        return
+    try:
+        if source_id == "unifi_cloud":
+            config = {key: source[key].strip() for key in
+                      ("api_key", "console_id", "site_id", "label")}
+            api = UniFiCloud(async_get_clientsession(hass), config["api_key"])
+            if config["site_id"] not in [site.get("id") for site in
+                                         await api.sites(config["console_id"])]:
+                raise ValueError("Site is not available for this console")
+        else:
+            config = {key: source[key].strip() for key in
+                      ("address", "omadac_id", "client_id", "client_secret",
+                       "site_id", "label")}
+            api = Omada(async_get_clientsession(hass), config["address"],
+                        config["omadac_id"], config["client_id"], config["client_secret"])
+            if config["site_id"] not in [site.get("siteId") for site in await api.sites()]:
+                raise ValueError("Site is not available for this controller")
+        if not all(config.values()):
+            raise ValueError("All fields are required")
+    except (KeyError, ValueError, UniFiApiError, OmadaApiError) as err:
+        connection.send_error(msg["id"], "source_error", str(err))
+        return
+    await coordinator.set_source(source_id, {"type": source_id, **config})
     connection.send_result(msg["id"])

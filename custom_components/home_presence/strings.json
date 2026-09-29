@@ -1,12 +1,1 @@
-{
-  "config": {
-    "step": {
-      "user": {"title": "Choose an integration", "data": {"provider": "Presence source"}},
-      "unifi_key": {"title": "UniFi Cloud API", "description": "Create an API key in UniFi Site Manager → Settings → API Keys.", "data": {"api_key": "API key"}},
-      "console": {"title": "Select Dream Machine", "data": {"console_id": "Console"}},
-      "site": {"title": "Select Network site", "data": {"site_id": "Site"}}
-    },
-    "error": {"cannot_connect": "Unable to connect to the UniFi Cloud Connector API.", "no_consoles": "No UniFi consoles found for this API key.", "no_sites": "No Network sites found. Check Cloud Connector support on your console."},
-    "abort": {"already_configured": "This site is already configured."}
-  }
-}
+{"config":{"step":{"user":{"title":"Home Presence","description":"Set up UniFi Cloud or TP-Link Omada in the Home Presence → Integrations tab after adding this integration."}},"abort":{"already_configured":"Home Presence is already configured."}}}

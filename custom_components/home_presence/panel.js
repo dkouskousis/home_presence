@@ -77,7 +77,7 @@ class HomePresencePanel extends HTMLElement {
         .toolbar { display:flex; gap:10px; margin:16px 0 }
         button { cursor:pointer; border:0; border-radius:10px; padding:10px 15px; font:inherit; font-weight:600; background:var(--primary-color); color:var(--text-primary-color,white) }
         button.outline { background:var(--secondary-background-color); color:var(--primary-text-color) }
-        input { width:100%; box-sizing:border-box; padding:11px; border:1px solid var(--divider-color); border-radius:10px; background:var(--card-background-color); color:var(--primary-text-color); font:inherit }
+        input,select { width:100%; box-sizing:border-box; padding:11px; border:1px solid var(--divider-color); border-radius:10px; background:var(--card-background-color); color:var(--primary-text-color); font:inherit }
         input[type=checkbox] { width:auto; margin-right:9px }
         label { display:block; margin:15px 0 6px; font-weight:600 }
         .check { font-weight:400; padding:6px 0 }
@@ -142,31 +142,32 @@ class HomePresencePanel extends HTMLElement {
     for (const entry of this._entries) {
       const section = this.element("section");
       section.append(this.element("h2", entry.title));
-      const connected = new Map(entry.clients.map(client => [client.mac, client]));
+      const connected = new Map(entry.clients.map(client => [client.id, client]));
       for (const [id, device] of Object.entries(entry.devices)) {
-        if (!connected.has(id)) connected.set(id, { mac:id, name:device.name, ip:"" });
+        if (!connected.has(id)) connected.set(id, { id, mac:id.split("|")[1], name:device.name, ip:"", source:id.split("|")[0] });
       }
       const items = [...connected.values()].sort((a,b) =>
-        Number(b.mac in entry.devices) - Number(a.mac in entry.devices) ||
-        (entry.devices[a.mac]?.name || a.name).localeCompare(entry.devices[b.mac]?.name || b.name));
+        Number(b.id in entry.devices) - Number(a.id in entry.devices) ||
+        (entry.devices[a.id]?.name || a.name).localeCompare(entry.devices[b.id]?.name || b.name));
       let shown = 0;
       for (const client of items) {
-        const device = entry.devices[client.mac];
+        const device = entry.devices[client.id];
         const name = device?.name || client.name;
         if (!`${name} ${client.name} ${client.ip} ${client.mac}`.toLowerCase().includes(search)) continue;
         shown++;
         const row = this.element("div", undefined, "row");
         const identity = this.element("div", undefined, "identity");
         const heading = this.element("div", undefined, "name");
-        heading.append(this.element("span", undefined, `dot ${entry.present.includes(client.mac) ? "on" : ""}`),
+        heading.append(this.element("span", undefined, `dot ${entry.present.includes(client.id) ? "on" : ""}`),
           document.createTextNode(name));
-        const status = entry.present.includes(client.mac) ? "Home" :
-          entry.clients.some(item => item.mac === client.mac) ? "Connected" : "Away";
+        const status = entry.unavailable.includes(client.id) ? "Unavailable" :
+          entry.present.includes(client.id) ? "Home" :
+          entry.clients.some(item => item.id === client.id) ? "Connected" : "Away";
         const groupNames = (device?.groups || []).map(id => entry.groups[id]?.name).filter(Boolean);
         identity.append(heading, this.element("div",
-          `${status} · ${client.ip ? client.ip + " · " : ""}${client.mac}${groupNames.length ? " · " + groupNames.join(", ") : ""}`, "meta"));
-        if (device && entry.device_entities[client.mac]) {
-          identity.append(this.element("div", entry.device_entities[client.mac], "meta"));
+          `${status} · ${client.source} · ${client.ip ? client.ip + " · " : ""}${client.mac}${groupNames.length ? " · " + groupNames.join(", ") : ""}`, "meta"));
+        if (device && entry.device_entities[client.id]) {
+          identity.append(this.element("div", entry.device_entities[client.id], "meta"));
         }
         row.append(identity, this.button(device ? "Edit" : "Add device",
           () => this.editDevice(entry, client), !!device));
@@ -178,7 +179,7 @@ class HomePresencePanel extends HTMLElement {
   }
 
   editDevice(entry, client) {
-    const device = entry.devices[client.mac];
+    const device = entry.devices[client.id];
     const dialog = this.shadowRoot.querySelector("#editor");
     dialog.replaceChildren();
     const form = this.element("form");
@@ -206,7 +207,7 @@ class HomePresencePanel extends HTMLElement {
     const actions = this.element("div", undefined, "actions");
     if (device) actions.append(this.button("Remove", async () => {
       dialog.close();
-      await this.update("set_device", {entry_id:entry.id, device_id:client.mac, name:null});
+      await this.update("set_device", {entry_id:entry.id, device_id:client.id, name:null});
     }, true));
     actions.append(this.button("Cancel", () => dialog.close(), true));
     const save = this.element("button", "Save");
@@ -217,7 +218,7 @@ class HomePresencePanel extends HTMLElement {
       event.preventDefault();
       dialog.close();
       await this.update("set_device", {
-        entry_id:entry.id, device_id:client.mac, name:input.value.trim(),
+        entry_id:entry.id, device_id:client.id, name:input.value.trim(),
         groups:[...checks.querySelectorAll("input:checked")].map(item => item.value),
       });
     };
@@ -288,19 +289,137 @@ class HomePresencePanel extends HTMLElement {
 
   renderIntegrations() {
     const root = this.shadowRoot.querySelector("#view");
-    for (const entry of this._entries) {
+    const entry = this._entries[0];
+    if (!entry) return;
+    const names = {unifi_cloud:"UniFi Cloud", omada:"TP-Link Omada"};
+    for (const provider of ["unifi_cloud", "omada"]) {
+      const source = entry.sources.find(item => item.id === provider);
       const card = this.element("section");
-      card.append(this.element("h2", entry.provider),
-        this.element("p", `${entry.title} · ${entry.available ? "Connected" : "Unavailable"} · ${entry.clients.length} clients`));
+      const heading = this.element("div", undefined, "between");
+      heading.append(this.element("h2", names[provider]),
+        this.button(source ? "Configure" : "Add integration", () => this.editIntegration(entry, provider), !!source));
+      card.append(heading);
+      if (source) {
+        card.append(this.element("p", `${source.label} · ${source.available ? "Connected" : "Unavailable"} · Site ${source.site_id}`));
+        if (source.error) card.append(this.element("div", source.error, "meta"));
+      } else {
+        card.append(this.element("p", provider === "unifi_cloud" ?
+          "Connect with a UniFi Site Manager API key." :
+          "Connect to an Omada Controller Open API app using client credentials."));
+      }
       root.append(card);
     }
-    const add = this.element("section");
-    add.append(this.element("h2", "Add a presence source"),
-      this.element("p", "In Home Assistant integrations, add Home Presence and choose UniFi Cloud."));
-    const link = this.element("a", "Open integrations →");
-    link.href = "/config/integrations/dashboard";
-    add.append(link);
-    root.append(add);
+  }
+
+  editIntegration(entry, provider) {
+    const dialog = this.shadowRoot.querySelector("#editor");
+    dialog.replaceChildren();
+    const form = this.element("form");
+    const title = this.element("h2", provider === "unifi_cloud" ? "UniFi Cloud" : "TP-Link Omada");
+    form.append(title);
+    const fields = {};
+    const specs = provider === "unifi_cloud" ?
+      [["api_key", "Site Manager API key", "password"]] :
+      [["address", "Interface access address (https://host:port)", "url"],
+       ["omadac_id", "Omada ID", "text"], ["client_id", "Client ID", "text"],
+       ["client_secret", "Client secret", "password"]];
+    for (const [key, labelText, type] of specs) {
+      const label = this.element("label", labelText);
+      const input = this.element("input");
+      input.type = type; input.required = true; input.autocomplete = "off";
+      label.append(input); form.append(label); fields[key] = input;
+    }
+    if (entry.sources.some(item => item.id === provider)) {
+      form.append(this.element("p", "Enter credentials again to change this connection."));
+    }
+    const discovery = this.element("div");
+    form.append(discovery);
+    const error = this.element("div");
+    form.append(error);
+    const actions = this.element("div", undefined, "actions");
+    const discover = this.button("Find sites", async () => {
+      error.replaceChildren();
+      discovery.replaceChildren();
+      const credentials = Object.fromEntries(Object.entries(fields).map(([key, input]) => [key, input.value.trim()]));
+      if (!form.reportValidity()) return;
+      discover.disabled = true;
+      try {
+        let consoleId;
+        if (provider === "unifi_cloud") {
+          const hosts = await this._hass.callWS({type:"home_presence/discover", entry_id:entry.id,
+            provider, credentials});
+          if (!hosts.length) throw Error("No UniFi consoles found");
+          const label = this.element("label", "Console");
+          const select = this.element("select");
+          this.appendOptions(select, hosts);
+          label.append(select); discovery.append(label);
+          const sitesLabel = this.element("label", "Site");
+          const siteSelect = this.element("select");
+          sitesLabel.append(siteSelect); discovery.append(sitesLabel);
+          const loadSites = async () => {
+            siteSelect.replaceChildren();
+            const sites = await this._hass.callWS({type:"home_presence/discover", entry_id:entry.id,
+              provider, credentials, console_id:select.value});
+            if (!sites.length) throw Error("No Network sites found");
+            this.appendOptions(siteSelect, sites);
+          };
+          select.onchange = () => loadSites().catch(err => error.replaceChildren(
+            this.element("div", err.message || String(err), "error")));
+          await loadSites();
+          consoleId = select;
+          fields.site_id = siteSelect;
+        } else {
+          const sites = await this._hass.callWS({type:"home_presence/discover", entry_id:entry.id,
+            provider, credentials});
+          if (!sites.length) throw Error("No Omada sites found");
+          const label = this.element("label", "Site");
+          const select = this.element("select");
+          this.appendOptions(select, sites);
+          label.append(select); discovery.append(label);
+          fields.site_id = select;
+        }
+        fields.console_id = consoleId;
+        const label = this.element("label", "Connection name");
+        const input = this.element("input"); input.required = true; input.maxLength = 80;
+        input.value = provider === "unifi_cloud" ? "UniFi Cloud" : "TP-Link Omada";
+        label.append(input); discovery.append(label); fields.label = input;
+        const save = this.element("button", "Save integration"); save.type = "submit";
+        discovery.append(this.element("div", undefined, "actions"));
+        discovery.lastChild.append(save);
+      } catch (err) {
+        error.replaceChildren(this.element("div", err.message || String(err), "error"));
+      } finally {
+        discover.disabled = false;
+      }
+    });
+    if (entry.sources.some(item => item.id === provider)) actions.append(this.button("Remove", async () => {
+      if (!window.confirm("Remove this integration and its selected devices?")) return;
+      try {
+        await this._hass.callWS({type:"home_presence/set_source", entry_id:entry.id, provider});
+        dialog.close(); await this.refresh(true);
+      } catch (err) { error.replaceChildren(this.element("div", err.message || String(err), "error")); }
+    }, true));
+    actions.append(this.button("Cancel", () => dialog.close(), true), discover);
+    form.append(actions);
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const source = Object.fromEntries(Object.entries(fields).filter(([,input]) => input)
+        .map(([key,input]) => [key,input.value.trim()]));
+      try {
+        await this._hass.callWS({type:"home_presence/set_source", entry_id:entry.id, provider, source});
+        dialog.close(); await this.refresh(true);
+      } catch (err) { error.replaceChildren(this.element("div", err.message || String(err), "error")); }
+    };
+    dialog.append(form);
+    dialog.showModal();
+  }
+
+  appendOptions(select, options) {
+    for (const item of options) {
+      const option = this.element("option", item.name);
+      option.value = item.id;
+      select.append(option);
+    }
   }
 
   renderSettings() {

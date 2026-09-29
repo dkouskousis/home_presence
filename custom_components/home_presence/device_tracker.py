@@ -32,7 +32,11 @@ class PresenceDevice(CoordinatorEntity, ScannerEntity):
 
     @property
     def mac_address(self):
-        return self.device_id
+        return self.device_id.split("|", 1)[1]
+
+    @property
+    def available(self):
+        return self.coordinator.source_available(self.device_id)
 
     @property
     def ip_address(self):

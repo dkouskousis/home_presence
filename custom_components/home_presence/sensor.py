@@ -20,5 +20,10 @@ class PresentDeviceCount(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = coordinator.unique_id("count", "all")
 
     @property
+    def available(self):
+        return all(self.coordinator.source_available(key)
+                   for key in self.coordinator.devices)
+
+    @property
     def native_value(self):
         return len(self.coordinator.present_ids())

@@ -1,27 +1,30 @@
 # Home Presence
 
-Home Assistant integration for tracking selected devices on your network, naming them, and organizing them into groups. The first presence source is UniFi Cloud through the official Cloud Connector API. Additional sources can use the provider interface.
+A Home Assistant custom integration for finding selected devices at home through UniFi Cloud or TP-Link Omada. Give each device a name and assign it to one or more shared groups, such as Family, Friends, and Guests.
 
-## Features
+## What it creates
 
-- **Devices:** Select a currently connected client, give it a name, and choose one or more groups. Every selected device gets a `device_tracker` with `home` / `not_home` state. Edit its name and groups later.
-- **Groups:** Create groups such as Family, Friends, and Guests. Every group gets a `binary_sensor` that is on if at least one member is home.
-- **Overall presence:** `binary_sensor.anyone_at_home` and a count sensor for all selected devices. Actual entity IDs depend on your HA entity registry.
-- **Integrations:** See connection status and add a new source through Home Assistant's integration setup.
-- **Settings:** Configure polling (30–600 seconds) and away delay (0–3600 seconds) separately per source.
+- A `device_tracker` for every selected device (`home` or `not_home`). The entity name follows changes in the Devices tab.
+- A presence `binary_sensor` for each group, on when at least one member is home.
+- An overall "Anyone at home" binary sensor and a "Devices at home" count sensor.
 
-## Requirements
+Entity IDs are shown next to devices and groups in Home Presence. A disconnected device stays selected. Network/API failures make affected device entities unavailable; a group and the totals are unavailable if any of their selected devices have an unavailable source, so an outage does not incorrectly report everyone away.
 
-- UniFi console with Cloud Connector support (UniFi OS firmware 5.0.3 or later) and UniFi Network with the official integration API.
-- UniFi Site Manager API key with access to the console and site; outbound HTTPS from Home Assistant to `api.ui.com`.
+## Install and configure
 
-## Install
+1. Add this repository to HACS as a custom integration, or copy `custom_components/home_presence` to `/config/custom_components/`, then restart Home Assistant.
+2. Go to **Settings → Devices & services → Add integration → Home Presence**. Complete the one-step setup.
+3. Open **Home Presence → Integrations** in the sidebar. Add UniFi Cloud or TP-Link Omada, supply credentials, discover the controller and site, and save. Both sources can be configured together.
+4. Add connected devices from **Devices** and assign them to groups created in **Groups**. Set the refresh interval (30–600 seconds) and away delay (0–3600 seconds) in **Settings**.
 
-1. Add this repository to HACS as a custom integration, or copy `custom_components/home_presence` to `/config/custom_components/`. Restart Home Assistant.
-2. In **Settings → Devices & services → Add integration**, choose **Home Presence → UniFi Cloud**. Enter the UniFi Site Manager API key from **Settings → API Keys**, then choose the console and site.
-3. Open **Home Presence** in the sidebar. In **Groups**, create any groups you need. In **Devices**, add phones or other devices and assign them to groups.
-4. Use the device trackers or group binary sensors in automations. Entity IDs are displayed beside tracked devices and groups.
+### UniFi Cloud
 
-Selections persist when a device disconnects. A device's IP may change; it is identified by the MAC address reported by UniFi. A phone that rotates its private Wi-Fi address must be added again under its new address. Only connected devices appear for first-time selection. If the cloud connection fails, the entities become unavailable rather than reporting everybody away.
+Create an API key in UniFi Site Manager → Settings → API Keys. Your console must support the UniFi Cloud Connector integration API. Home Assistant needs outbound HTTPS access to `api.ui.com`. In the Integrations tab, enter the API key, discover your console and Network site, then save.
 
-The API key stays in the Home Assistant config entry and is not sent to the panel. The panel is admin-only. Selected names, group memberships, and settings are stored by Home Assistant.
+### TP-Link Omada
+
+In the Omada Controller's Global View → Settings → Platform Integration → Open API, create an app in **Client Credentials** mode with permission for the intended site. Copy its **Interface Access Address**, **Omada ID**, **Client ID**, and **Client Secret** into the Integrations tab. The address must be an HTTPS controller origin (for example `https://controller.example:8043`) with a certificate trusted by Home Assistant. Discover a site, then save. The integration uses the documented Omada Open API, with token renewal and active-client filtering. An API failure is shown in the Integrations tab.
+
+Credentials are stored in Home Assistant's config entry and never returned to the panel when listing configured sources. The Home Presence panel and its WebSocket commands are admin-only. Removing a source also removes its selected devices and their entities; group membership for those devices is removed. MAC addresses identify devices within each source, so the same phone may be added once per network source. A rotating private Wi-Fi address is seen as a new device.
+
+Existing UniFi setups are read and moved into the Integrations tab on upgrade; selected devices and groups are retained. Their device tracker unique IDs change to include the source. Check any automations that refer to old device tracker entity IDs after upgrading.
