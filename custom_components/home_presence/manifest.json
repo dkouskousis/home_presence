@@ -1,7 +1,7 @@
 {
   "domain": "home_presence",
   "name": "Home Presence",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "documentation": "https://github.com/dkouskousis/home_presence",
   "issue_tracker": "https://github.com/dkouskousis/home_presence/issues",
   "requirements": [],

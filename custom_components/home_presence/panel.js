@@ -248,7 +248,9 @@ class HomePresencePanel extends HTMLElement {
         identity.append(title, this.element("div",
           `${present.length} at home · ${members.length} devices`, "meta"));
         if (entry.group_entities[id]) identity.append(
-          this.element("div", entry.group_entities[id], "meta"));
+          this.element("div", `Presence sensor: ${entry.group_entities[id]}`, "meta"));
+        if (entry.group_tracker_entities[id]) identity.append(
+          this.element("div", `Person tracker: ${entry.group_tracker_entities[id]}`, "meta"));
         row.append(identity, this.button("Edit", () => this.editGroup(entry, id), true));
         section.append(row);
       }

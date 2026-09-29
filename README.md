@@ -8,9 +8,12 @@ The installed integration version appears at the top of the Home Presence panel.
 
 - A `device_tracker` for every selected device (`home` or `not_home`). The entity name follows changes in the Devices tab.
 - A presence `binary_sensor` for each group, on when at least one member is home.
+- A `device_tracker` for each group, with `home` when any member is home. Select this tracker for a Home Assistant Person (for example, assign **Guests presence** to a Person named Guest). The group binary sensor cannot be selected in Person because Person accepts device trackers.
 - An overall "Anyone at home" binary sensor and a "Devices at home" count sensor.
 
 Entity IDs are shown next to devices and groups in Home Presence. A disconnected device stays selected. Network/API failures make affected device entities unavailable; a group and the totals are unavailable if any of their selected devices have an unavailable source, so an outage does not incorrectly report everyone away.
+
+Selected device trackers are enabled even when the phone does not have a matching Home Assistant device registry entry. On upgrade, existing trackers previously disabled by the integration are enabled, and their entity IDs are kept when possible.
 
 ## Install and configure
 

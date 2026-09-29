@@ -195,16 +195,23 @@ class PresenceCoordinator(DataUpdateCoordinator):
             await self.save()
             if existed:
                 await self.remove_entity("binary_sensor", "group", group_id)
+                await self.remove_entity("device_tracker", "group_tracker", group_id)
         else:
             group_id = group_id or uuid4().hex
             self.groups[group_id] = {"name": name.strip()}
             await self.save()
             if existed:
                 await self.rename_entity("binary_sensor", "group", group_id, name.strip())
+                await self.rename_entity("device_tracker", "group_tracker", group_id,
+                                         f"{name.strip()} presence")
             else:
                 from .binary_sensor import PresenceGroup
+                from .device_tracker import PresenceGroupTracker
                 await self.platforms["binary_sensor"].async_add_entities(
                     [PresenceGroup(self, group_id)]
+                )
+                await self.platforms["device_tracker"].async_add_entities(
+                    [PresenceGroupTracker(self, group_id)]
                 )
         self.async_update_listeners()
         return group_id
@@ -234,6 +241,7 @@ class PresenceCoordinator(DataUpdateCoordinator):
             await self.remove_entity("device_tracker", "device", device_id)
         for group_id in old_groups - new_groups:
             await self.remove_entity("binary_sensor", "group", group_id)
+            await self.remove_entity("device_tracker", "group_tracker", group_id)
 
         self.sources = restored["sources"]
         self.devices = restored["devices"]
@@ -247,7 +255,7 @@ class PresenceCoordinator(DataUpdateCoordinator):
         self._make_providers()
         await self.async_refresh()
 
-        from .device_tracker import PresenceDevice
+        from .device_tracker import PresenceDevice, PresenceGroupTracker
         from .binary_sensor import PresenceGroup
         if new_devices - old_devices:
             await self.platforms["device_tracker"].async_add_entities(
@@ -257,18 +265,36 @@ class PresenceCoordinator(DataUpdateCoordinator):
             await self.platforms["binary_sensor"].async_add_entities(
                 [PresenceGroup(self, key) for key in sorted(new_groups - old_groups)]
             )
+            await self.platforms["device_tracker"].async_add_entities(
+                [PresenceGroupTracker(self, key) for key in sorted(new_groups - old_groups)]
+            )
         for key in new_devices & old_devices:
             await self.rename_entity("device_tracker", "device", key,
                                      self.devices[key]["name"])
         for key in new_groups & old_groups:
             await self.rename_entity("binary_sensor", "group", key,
                                      self.groups[key]["name"])
+            await self.rename_entity("device_tracker", "group_tracker", key,
+                                     f"{self.groups[key]['name']} presence")
         self.async_update_listeners()
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = PresenceCoordinator(hass, entry)
     await coordinator.load()
+    registry = entity_registry.async_get(hass)
+    for device_id in coordinator.devices:
+        unique_id = coordinator.unique_id("device", device_id)
+        entity_id = registry.async_get_entity_id("device_tracker", DOMAIN, unique_id)
+        if entity_id is None:
+            mac = device_id.split("|", 1)[1]
+            entity_id = registry.async_get_entity_id("device_tracker", DOMAIN, mac)
+            if entity_id:
+                registry.async_update_entity(entity_id, new_unique_id=unique_id)
+        if entity_id:
+            registered = registry.async_get(entity_id)
+            if registered.disabled_by == entity_registry.RegistryEntryDisabler.INTEGRATION:
+                registry.async_update_entity(entity_id, disabled_by=None)
     await coordinator.async_refresh()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -285,7 +311,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.data[DOMAIN].get("_panel_registered"):
         await panel_custom.async_register_panel(
             hass, frontend_url_path=DOMAIN, webcomponent_name="home-presence-panel",
-            module_url=f"/{DOMAIN}/panel.js?v=6", sidebar_title="Home Presence",
+            module_url=f"/{DOMAIN}/panel.js?v=7", sidebar_title="Home Presence",
             sidebar_icon="mdi:home-account", require_admin=True,
             config_panel_domain=DOMAIN,
         )
@@ -338,6 +364,8 @@ def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg
                                 for key in coordinator.devices},
             "group_entities": {key: entity_id("binary_sensor", "group", key)
                                for key in coordinator.groups},
+            "group_tracker_entities": {key: entity_id("device_tracker", "group_tracker", key)
+                                       for key in coordinator.groups},
             "settings": coordinator.settings,
             "present": coordinator.present_ids(),
             "unavailable": [key for key in coordinator.devices
