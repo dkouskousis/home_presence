@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import json
 import logging
 from pathlib import Path
 from uuid import uuid4
@@ -26,6 +27,9 @@ from .providers.omada import Omada, OmadaApiError, OmadaPresenceProvider
 
 PLATFORMS = ["device_tracker", "binary_sensor", "sensor"]
 DEFAULT_SETTINGS = {"poll_seconds": 60, "away_seconds": 180}
+INTEGRATION_VERSION = json.loads(
+    (Path(__file__).parent / "manifest.json").read_text(encoding="utf-8")
+)["version"]
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -281,7 +285,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.data[DOMAIN].get("_panel_registered"):
         await panel_custom.async_register_panel(
             hass, frontend_url_path=DOMAIN, webcomponent_name="home-presence-panel",
-            module_url=f"/{DOMAIN}/panel.js?v=4", sidebar_title="Home Presence",
+            module_url=f"/{DOMAIN}/panel.js?v=5", sidebar_title="Home Presence",
             sidebar_icon="mdi:home-account", require_admin=True,
             config_panel_domain=DOMAIN,
         )
@@ -321,7 +325,7 @@ def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg
             return registry.async_get_entity_id(domain, DOMAIN, coordinator.unique_id(kind, key))
 
         entries.append({
-            "id": entry_id, "title": "Home Presence",
+            "id": entry_id, "title": "Home Presence", "version": INTEGRATION_VERSION,
             "sources": [{"id": key, "type": source["type"],
                          "label": source.get("label", key),
                          "site_id": source["site_id"],

@@ -91,13 +91,16 @@ class HomePresencePanel extends HTMLElement {
         @media(max-width:600px) { main { padding:18px 14px 60px } section { padding:17px } header { align-items:flex-start } }
       </style>
       <main>
-        <header><div><h1>Home Presence</h1><p>Manage who is home, by device and group.</p></div><button class="outline" id="refresh">Refresh</button></header>
+        <header><div><h1>Home Presence</h1><p id="subtitle">Manage who is home, by device and group.</p></div><button class="outline" id="refresh">Refresh</button></header>
         <div id="error"></div>
         <nav aria-label="Home Presence sections"></nav>
         <div id="view"></div>
         <dialog id="editor"></dialog>
       </main>`;
     const error = this.shadowRoot.querySelector("#error");
+    const version = this._entries[0]?.version;
+    if (version) this.shadowRoot.querySelector("#subtitle").textContent =
+      `Version ${version} · Manage who is home, by device and group.`;
     if (this._error) error.append(this.element("div", this._error, "error"));
     this.shadowRoot.querySelector("#refresh").onclick = () => this.refresh();
     const nav = this.shadowRoot.querySelector("nav");

@@ -2,6 +2,8 @@
 
 A Home Assistant custom integration for finding selected devices at home through UniFi Cloud or TP-Link Omada. Give each device a name and assign it to one or more shared groups, such as Family, Friends, and Guests.
 
+The installed integration version appears at the top of the Home Presence panel. HACS versions are published as GitHub releases tagged with the same version as `manifest.json`.
+
 ## What it creates
 
 - A `device_tracker` for every selected device (`home` or `not_home`). The entity name follows changes in the Devices tab.
