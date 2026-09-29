@@ -1,7 +1,7 @@
 {
   "domain": "guest_presence",
-  "name": "Guest Presence",
-  "version": "0.1.0",
+  "name": "Home Presence",
+  "version": "0.2.0",
   "documentation": "https://developer.ui.com/network/",
   "requirements": [],
   "dependencies": ["http", "websocket_api", "panel_custom"],

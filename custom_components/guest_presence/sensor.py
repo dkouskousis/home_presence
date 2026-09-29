@@ -1,4 +1,4 @@
-"""Number of selected guests currently connected."""
+"""Total number of selected devices at home."""
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -7,18 +7,18 @@ from .const import DOMAIN
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    async_add_entities([GuestCount(hass.data[DOMAIN][entry.entry_id])])
+    async_add_entities([PresentDeviceCount(hass.data[DOMAIN][entry.entry_id])])
 
 
-class GuestCount(CoordinatorEntity, SensorEntity):
-    _attr_name = "Guest count"
-    _attr_icon = "mdi:account-multiple"
-    _attr_native_unit_of_measurement = "guests"
+class PresentDeviceCount(CoordinatorEntity, SensorEntity):
+    _attr_name = "Devices at home"
+    _attr_icon = "mdi:devices"
+    _attr_native_unit_of_measurement = "devices"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_guest_count"
+        self._attr_unique_id = coordinator.unique_id("count", "all")
 
     @property
     def native_value(self):
-        return len(self.coordinator.present_guests())
+        return len(self.coordinator.present_ids())
