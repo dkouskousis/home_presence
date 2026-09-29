@@ -50,6 +50,13 @@ class BackupValidationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             backup.validate_backup(self.data)
 
+    def test_allows_seven_second_polling_and_rejects_six(self):
+        self.data["settings"]["poll_seconds"] = 7
+        self.assertIs(backup.validate_backup(self.data), self.data)
+        self.data["settings"]["poll_seconds"] = 6
+        with self.assertRaises(ValueError):
+            backup.validate_backup(self.data)
+
 
 if __name__ == "__main__":
     unittest.main()

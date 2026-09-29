@@ -17,7 +17,7 @@ Entity IDs are shown next to devices and groups in Home Presence. A disconnected
 1. Add this repository to HACS as a custom integration, or copy `custom_components/home_presence` to `/config/custom_components/`, then restart Home Assistant.
 2. Go to **Settings → Devices & services → Add integration → Home Presence**. Complete the one-step setup.
 3. Open **Home Presence → Integrations** in the sidebar. Add UniFi Cloud or TP-Link Omada, supply credentials, discover the controller and site, and save. Both sources can be configured together.
-4. Add connected devices from **Devices** and assign them to groups created in **Groups**. Set the refresh interval (30–600 seconds) and away delay (0–3600 seconds) in **Settings**.
+4. Add connected devices from **Devices** and assign them to groups created in **Groups**. Set the refresh interval (7–600 seconds) and away delay (0–3600 seconds) in **Settings**.
 
 ## Backup and restore
 

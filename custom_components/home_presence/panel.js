@@ -433,7 +433,7 @@ class HomePresencePanel extends HTMLElement {
       const form = this.element("form");
       const pollLabel = this.element("label", "Refresh interval (seconds)");
       const poll = this.element("input");
-      poll.type = "number"; poll.min = 30; poll.max = 600;
+      poll.type = "number"; poll.min = 7; poll.max = 600;
       poll.value = entry.settings.poll_seconds;
       pollLabel.append(poll);
       const awayLabel = this.element("label", "Mark away after disconnect (seconds)");

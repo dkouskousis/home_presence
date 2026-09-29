@@ -69,7 +69,7 @@ def validate_backup(value: object) -> dict:
 
     if (not isinstance(settings, dict) or set(settings) != {"poll_seconds", "away_seconds"}
             or type(settings["poll_seconds"]) is not int
-            or not 30 <= settings["poll_seconds"] <= 600
+            or not 7 <= settings["poll_seconds"] <= 600
             or type(settings["away_seconds"]) is not int
             or not 0 <= settings["away_seconds"] <= 3600):
         raise ValueError("Invalid settings in backup")

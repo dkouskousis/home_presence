@@ -213,7 +213,7 @@ class PresenceCoordinator(DataUpdateCoordinator):
         self.settings = {"poll_seconds": poll_seconds, "away_seconds": away_seconds}
         self.update_interval = timedelta(seconds=poll_seconds)
         await self.save()
-        self.async_update_listeners()
+        await self.async_request_refresh()
 
     def backup(self) -> dict:
         """Export configuration, including integration credentials."""
@@ -285,7 +285,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.data[DOMAIN].get("_panel_registered"):
         await panel_custom.async_register_panel(
             hass, frontend_url_path=DOMAIN, webcomponent_name="home-presence-panel",
-            module_url=f"/{DOMAIN}/panel.js?v=5", sidebar_title="Home Presence",
+            module_url=f"/{DOMAIN}/panel.js?v=6", sidebar_title="Home Presence",
             sidebar_icon="mdi:home-account", require_admin=True,
             config_panel_domain=DOMAIN,
         )
@@ -407,7 +407,7 @@ async def ws_set_group(hass: HomeAssistant, connection: websocket_api.ActiveConn
 @websocket_api.websocket_command({
     vol.Required("type"): f"{DOMAIN}/set_settings",
     vol.Required("entry_id"): str,
-    vol.Required("poll_seconds"): vol.All(vol.Coerce(int), vol.Range(min=30, max=600)),
+    vol.Required("poll_seconds"): vol.All(vol.Coerce(int), vol.Range(min=7, max=600)),
     vol.Required("away_seconds"): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
 })
 @websocket_api.require_admin
