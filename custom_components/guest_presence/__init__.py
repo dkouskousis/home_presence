@@ -160,7 +160,7 @@ class PresenceCoordinator(DataUpdateCoordinator):
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = PresenceCoordinator(hass, entry)
     await coordinator.load()
-    await coordinator.async_config_entry_first_refresh()
+    await coordinator.async_refresh()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     if not hass.data[DOMAIN].get("_static_registered"):
