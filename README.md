@@ -17,6 +17,10 @@ Entity IDs are shown next to devices and groups in Home Presence. A disconnected
 3. Open **Home Presence → Integrations** in the sidebar. Add UniFi Cloud or TP-Link Omada, supply credentials, discover the controller and site, and save. Both sources can be configured together.
 4. Add connected devices from **Devices** and assign them to groups created in **Groups**. Set the refresh interval (30–600 seconds) and away delay (0–3600 seconds) in **Settings**.
 
+## Backup and restore
+
+Use **Settings → Backup & restore** to download a JSON backup or restore one. A backup contains integrations (including API keys and client secrets), selected devices, groups, and settings. Keep the file private. Restoring replaces the entire Home Presence setup and removes device and group entities that are absent from the backup. The file is checked before any changes are applied; confirm the replacement in the dialog.
+
 ### UniFi Cloud
 
 Create an API key in UniFi Site Manager → Settings → API Keys. Your console must support the UniFi Cloud Connector integration API. Home Assistant needs outbound HTTPS access to `api.ui.com`. In the Integrations tab, enter the API key, discover your console and Network site, then save.

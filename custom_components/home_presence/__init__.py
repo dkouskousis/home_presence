@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import logging
 from pathlib import Path
@@ -19,6 +20,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN
+from .backup import FORMAT, VERSION, validate_backup
 from .providers.unifi_cloud import UniFiApiError, UniFiCloud, UniFiPresenceProvider, normalize_mac
 from .providers.omada import Omada, OmadaApiError, OmadaPresenceProvider
 
@@ -209,6 +211,56 @@ class PresenceCoordinator(DataUpdateCoordinator):
         await self.save()
         self.async_update_listeners()
 
+    def backup(self) -> dict:
+        """Export configuration, including integration credentials."""
+        return deepcopy({
+            "format": FORMAT, "version": VERSION, "sources": self.sources,
+            "devices": self.devices, "groups": self.groups, "settings": self.settings,
+        })
+
+    async def restore(self, backup: dict) -> None:
+        """Replace configuration after the entire backup has been validated."""
+        restored = deepcopy(validate_backup(backup))
+        old_devices = set(self.devices)
+        old_groups = set(self.groups)
+        new_devices = set(restored["devices"])
+        new_groups = set(restored["groups"])
+
+        for device_id in old_devices - new_devices:
+            await self.remove_entity("device_tracker", "device", device_id)
+        for group_id in old_groups - new_groups:
+            await self.remove_entity("binary_sensor", "group", group_id)
+
+        self.sources = restored["sources"]
+        self.devices = restored["devices"]
+        self.groups = restored["groups"]
+        self.settings = restored["settings"]
+        self.last_seen.clear()
+        self.status.clear()
+        self.update_interval = timedelta(seconds=self.settings["poll_seconds"])
+        await self.save()
+        self.hass.config_entries.async_update_entry(self.entry, data={"sources": self.sources})
+        self._make_providers()
+        await self.async_refresh()
+
+        from .device_tracker import PresenceDevice
+        from .binary_sensor import PresenceGroup
+        if new_devices - old_devices:
+            await self.platforms["device_tracker"].async_add_entities(
+                [PresenceDevice(self, key) for key in sorted(new_devices - old_devices)]
+            )
+        if new_groups - old_groups:
+            await self.platforms["binary_sensor"].async_add_entities(
+                [PresenceGroup(self, key) for key in sorted(new_groups - old_groups)]
+            )
+        for key in new_devices & old_devices:
+            await self.rename_entity("device_tracker", "device", key,
+                                     self.devices[key]["name"])
+        for key in new_groups & old_groups:
+            await self.rename_entity("binary_sensor", "group", key,
+                                     self.groups[key]["name"])
+        self.async_update_listeners()
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = PresenceCoordinator(hass, entry)
@@ -223,13 +275,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN]["_static_registered"] = True
     if not hass.data[DOMAIN].get("_commands_registered"):
         for command in (ws_list, ws_set_device, ws_set_group, ws_set_settings,
-                        ws_discover, ws_set_source):
+                        ws_discover, ws_set_source, ws_backup, ws_restore):
             websocket_api.async_register_command(hass, command)
         hass.data[DOMAIN]["_commands_registered"] = True
     if not hass.data[DOMAIN].get("_panel_registered"):
         await panel_custom.async_register_panel(
             hass, frontend_url_path=DOMAIN, webcomponent_name="home-presence-panel",
-            module_url=f"/{DOMAIN}/panel.js?v=3", sidebar_title="Home Presence",
+            module_url=f"/{DOMAIN}/panel.js?v=4", sidebar_title="Home Presence",
             sidebar_icon="mdi:home-account", require_admin=True,
             config_panel_domain=DOMAIN,
         )
@@ -446,4 +498,36 @@ async def ws_set_source(hass: HomeAssistant, connection: websocket_api.ActiveCon
         connection.send_error(msg["id"], "source_error", str(err))
         return
     await coordinator.set_source(source_id, {"type": source_id, **config})
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/backup",
+    vol.Required("entry_id"): str,
+})
+@websocket_api.require_admin
+@callback
+def ws_backup(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
+              msg: dict) -> None:
+    if (coordinator := get_coordinator(hass, connection, msg)) is not None:
+        connection.send_result(msg["id"], coordinator.backup())
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/restore",
+    vol.Required("entry_id"): str,
+    vol.Required("backup"): dict,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_restore(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
+                     msg: dict) -> None:
+    if (coordinator := get_coordinator(hass, connection, msg)) is None:
+        return
+    try:
+        validate_backup(msg["backup"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_backup", str(err))
+        return
+    await coordinator.restore(msg["backup"])
     connection.send_result(msg["id"])

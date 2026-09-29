@@ -452,6 +452,61 @@ class HomePresencePanel extends HTMLElement {
       };
       section.append(form);
       root.append(section);
+
+      const backup = this.element("section");
+      backup.append(this.element("h2", "Backup & restore"),
+        this.element("p", "Download all integrations, selected devices, groups and settings. The file includes API keys and secrets; keep it private."));
+      const download = this.button("Download backup", async () => {
+        try {
+          const data = await this._hass.callWS({type:"home_presence/backup", entry_id:entry.id});
+          const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
+          const url = URL.createObjectURL(blob);
+          const link = this.element("a");
+          link.href = url;
+          link.download = `home-presence-backup-${new Date().toISOString().slice(0, 10)}.json`;
+          document.body.append(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (error) {
+          this._error = error.message || String(error);
+          this.render();
+        }
+      });
+      const file = this.element("input");
+      file.type = "file";
+      file.accept = ".json,application/json";
+      file.setAttribute("aria-label", "Choose a Home Presence backup");
+      const restore = this.button("Restore backup", async () => {
+        if (!file.files?.length) {
+          this._error = "Choose a backup file first.";
+          this.render();
+          return;
+        }
+        try {
+          if (file.files[0].size > 5 * 1024 * 1024) throw Error("Backup exceeds 5 MB.");
+          const data = JSON.parse(await file.files[0].text());
+          if (!data || data.format !== "home_presence" || data.version !== 1) {
+            throw Error("This is not a supported Home Presence backup.");
+          }
+          const message = `Restore ${Object.keys(data.devices || {}).length} devices, ` +
+            `${Object.keys(data.groups || {}).length} groups and ` +
+            `${Object.keys(data.sources || {}).length} integrations? ` +
+            "This replaces the current Home Presence setup.";
+          if (!window.confirm(message)) return;
+          await this._hass.callWS({type:"home_presence/restore", entry_id:entry.id, backup:data});
+          await this.refresh(true);
+        } catch (error) {
+          this._error = error.message || String(error);
+          this.render();
+        }
+      }, true);
+      const buttons = this.element("div", undefined, "toolbar");
+      buttons.append(download, restore);
+      const fileLabel = this.element("label", "Restore from JSON");
+      fileLabel.append(file);
+      backup.append(fileLabel, buttons);
+      root.append(backup);
     }
   }
 }
